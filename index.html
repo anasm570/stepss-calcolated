@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>🏃 متتبع السرعة والمسافة فائق الدقة والسرعة</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', 'Cairo', Tahoma, sans-serif; }
+        body { background: linear-gradient(145deg, #1a2f3a, #0a1f2a); padding: 20px; color: white; min-height: 100vh; }
+        .container { max-width: 1000px; margin: auto; background: rgba(0,0,0,0.6); backdrop-filter: blur(12px); border-radius: 48px; padding: 20px; border: 1px solid #ffcc88; }
+        h1 { text-align: center; color: #ffdd99; margin-bottom: 10px; font-size: 1.5rem; }
+        .flex { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0; justify-content: center; }
+        button { padding: 8px 20px; border-radius: 40px; border: none; background: #e67e22; color: white; font-size: 0.9rem; cursor: pointer; transition: 0.1s; }
+        button:active { transform: scale(0.96); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .stats { background: #00000066; border-radius: 30px; padding: 15px; margin: 10px 0; text-align: center; }
+        .stat-value { font-size: 1.8rem; font-weight: bold; color: #88ffaa; }
+        .stat-label { font-size: 0.7rem; color: #ffdd99; }
+        .stat-row { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+        .stat-card { flex: 1; min-width: 100px; background: #00000044; border-radius: 20px; padding: 8px; }
+        #map { height: 300px; border-radius: 30px; margin: 10px 0; border: 2px solid #ffcc88; z-index: 1; }
+        .log { max-height: 120px; overflow-y: auto; font-size: 0.7rem; margin-top: 10px; border-top: 1px solid #ffaa5544; padding-top: 10px; }
+        .note { font-size: 0.65rem; color: #88aacc; text-align: center; margin-top: 10px; }
+        input { padding: 5px 10px; border-radius: 30px; border: none; background: #2c3e2f; color: white; margin: 0 5px; width: 70px; }
+        .settings { background: #1e2a32aa; border-radius: 30px; padding: 10px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🏃 متتبع دقيق وسريع (GPS فائق الأداء)</h1>
+    
+    <div class="settings">
+        <div class="flex">
+            <label>⚖️ الوزن (كجم):</label>
+            <input type="number" id="weight" value="70" step="1">
+            <label>🎯 دقة التحديث (ثانية):</label>
+            <input type="number" id="updateInterval" value="1" step="0.5" min="0.5" max="3">
+        </div>
+    </div>
+
+    <div class="flex">
+        <button id="startBtn">▶️ بدء التتبع (دقيق)</button>
+        <button id="stopBtn" disabled>⏹️ إيقاف</button>
+        <button id="resetBtn" disabled>🔄 إعادة ضبط</button>
+    </div>
+
+    <div id="map"></div>
+
+    <div class="stats">
+        <div class="stat-value"><span id="distance">0.00</span> <span style="font-size:1rem;">متر</span></div>
+        <div class="stat-row">
+            <div class="stat-card"><div class="stat-label">⚡ سرعة لحظية</div><div class="stat-value" style="font-size:1.2rem;"><span id="currentSpeed">0.00</span> كم/س</div></div>
+            <div class="stat-card"><div class="stat-label">📊 متوسط السرعة</div><div class="stat-value" style="font-size:1.2rem;"><span id="avgSpeed">0.00</span> كم/س</div></div>
+            <div class="stat-card"><div class="stat-label">⏱️ الوقت</div><div class="stat-value" style="font-size:1.2rem;"><span id="elapsedTime">00:00:00</span></div></div>
+            <div class="stat-card"><div class="stat-label">🔥 سعرات</div><div class="stat-value" style="font-size:1.2rem;"><span id="calories">0</span></div></div>
+        </div>
+        <div id="gpsStatus" class="note" style="background:#00000044; border-radius:20px; padding:5px;">⏳ انتظار البدء</div>
+    </div>
+
+    <div class="log" id="logArea"></div>
+    <div class="note">📡 يعمل بأقصى دقة GPS. يحسب المسافة والسرعة لحظياً. كل حركة صغيرة يتم تسجيلها فوراً.</div>
+</div>
+
+<script>
+    // --------------------------------------------------------------
+    // إعدادات فائقة السرعة والدقة
+    // --------------------------------------------------------------
+    let watchId = null;
+    let tracking = false;
+    let startTimestamp = null;
+    let totalDistance = 0;          // متر
+    let points = [];                // نقاط المسار
+    let lastLat = null, lastLon = null, lastTimestampMs = null;
+    let currentSpeed = 0;
+    let totalMovingTimeMs = 0;
+    let lastSpeedUpdate = 0;
+    
+    // عناصر DOM
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const weightInput = document.getElementById('weight');
+    const updateIntervalInput = document.getElementById('updateInterval');
+    const distanceSpan = document.getElementById('distance');
+    const currentSpeedSpan = document.getElementById('currentSpeed');
+    const avgSpeedSpan = document.getElementById('avgSpeed');
+    const elapsedTimeSpan = document.getElementById('elapsedTime');
+    const caloriesSpan = document.getElementById('calories');
+    const gpsStatusDiv = document.getElementById('gpsStatus');
+    const logArea = document.getElementById('logArea');
+    
+    let map = null;
+    let polyline = null;
+    let marker = null;
+
+    function log(msg) {
+        const div = document.createElement('div');
+        div.innerText = new Date().toLocaleTimeString() + ' - ' + msg;
+        logArea.appendChild(div);
+        logArea.scrollTop = logArea.scrollHeight;
+        if (logArea.children.length > 40) logArea.removeChild(logArea.children[0]);
+    }
+
+    // حساب المسافة بدقة (Haversine)
+    function distanceMeters(lat1, lon1, lat2, lon2) {
+        const R = 6371000;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    // حساب السرعة (كم/ساعة)
+    function calculateSpeed(distMeters, timeMs) {
+        if (timeMs <= 0) return 0;
+        const hours = timeMs / 3600000;
+        const km = distMeters / 1000;
+        return km / hours;
+    }
+
+    // تحديث متوسط السرعة
+    function updateAverageSpeed() {
+        if (!startTimestamp || totalDistance === 0) return;
+        const elapsedMs = Date.now() - startTimestamp;
+        if (elapsedMs <= 0) return;
+        const hours = elapsedMs / 3600000;
+        const km = totalDistance / 1000;
+        const avg = km / hours;
+        avgSpeedSpan.innerText = avg.toFixed(2);
+    }
+
+    // تحديث السعرات الحرارية
+    function updateCalories() {
+        const weight = parseFloat(weightInput.value) || 70;
+        const km = totalDistance / 1000;
+        const avgSpeed = parseFloat(avgSpeedSpan.innerText) || 0;
+        let factor = avgSpeed < 7 ? 0.7 : 1.0;
+        const calories = Math.round(km * weight * factor);
+        caloriesSpan.innerText = calories;
+    }
+
+    // تحديث الوقت المنقضي
+    function updateElapsedTime() {
+        if (!tracking || !startTimestamp) return;
+        const elapsedMs = Date.now() - startTimestamp;
+        const totalSeconds = Math.floor(elapsedMs / 1000);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+        elapsedTimeSpan.innerText = `${hours.toString().padStart(2,'0')}:${minutes.toString().padStart(2,'0')}:${seconds.toString().padStart(2,'0')}`;
+        requestAnimationFrame(updateElapsedTime);
+    }
+
+    // تحديث الخريطة فوراً
+    function updateMap() {
+        if (!map || points.length === 0) return;
+        const latlngs = points.map(p => [p.lat, p.lon]);
+        if (polyline) map.removeLayer(polyline);
+        polyline = L.polyline(latlngs, { color: '#e67e22', weight: 5, smoothFactor: 0.5 }).addTo(map);
+        if (marker) map.removeLayer(marker);
+        marker = L.marker([points[points.length-1].lat, points[points.length-1].lon]).addTo(map);
+        map.fitBounds(latlngs);
+    }
+
+    // المعالج الرئيسي لبيانات GPS (يُستدعى فور وصول أي تحديث)
+    function onGpsUpdate(position) {
+        if (!tracking) return;
+        
+        const now = Date.now();
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+        const accuracy = position.coords.accuracy; // دقة GPS (متر)
+        
+        // تجاهل النقاط ذات الدقة الضعيفة جداً (أكثر من 30 متر خطأ)
+        if (accuracy > 30) {
+            gpsStatusDiv.innerHTML = `⚠️ دقة ضعيفة (${accuracy.toFixed(0)}م) انتظر...`;
+            return;
+        }
+        
+        // النقطة الأولى
+        if (lastLat === null) {
+            lastLat = lat;
+            lastLon = lon;
+            lastTimestampMs = now;
+            points.push({ lat, lon, timestamp: now, speed: 0 });
+            gpsStatusDiv.innerHTML = `📍 تم البدء بدقة ${accuracy.toFixed(0)}م`;
+            log(`📍 نقطة بداية (دقة ${accuracy.toFixed(0)}م)`);
+            // تهيئة الخريطة في أول نقطة
+            if (map) {
+                map.setView([lat, lon], 18);
+                if (marker) map.removeLayer(marker);
+                marker = L.marker([lat, lon]).addTo(map);
+            }
+            return;
+        }
+        
+        // حساب المسافة بين آخر نقطة وهذه النقطة
+        const dist = distanceMeters(lastLat, lastLon, lat, lon);
+        const timeDiff = now - lastTimestampMs;
+        
+        // تجاهل التحديثات المتكررة جداً (أقل من 0.1 ثانية) لأنها نفس الموقع تقريباً
+        if (timeDiff < 100) return;
+        
+        // حساب السرعة اللحظية
+        let instantSpeed = calculateSpeed(dist, timeDiff);
+        
+        // تحديث السرعة الحالية المعروضة
+        if (instantSpeed >= 0 && instantSpeed < 50) { // تجاهل السرعات غير المنطقية
+            currentSpeed = instantSpeed;
+            currentSpeedSpan.innerText = currentSpeed.toFixed(2);
+            lastSpeedUpdate = now;
+        }
+        
+        // إضافة المسافة إذا كانت الحركة حقيقية (أكثر من 0.1 متر) حتى أصغر حركة
+        if (dist > 0.1) {
+            totalDistance += dist;
+            distanceSpan.innerText = totalDistance.toFixed(2);
+            
+            // إضافة النقطة إلى المسار
+            points.push({ lat, lon, timestamp: now, speed: currentSpeed });
+            
+            // تحديث الخريطة فوراً
+            updateMap();
+            
+            // تحديث متوسط السرعة والسعرات
+            updateAverageSpeed();
+            updateCalories();
+            
+            // طباعة في السجل فقط كل 10 أمتار أو 5 ثواني لتجنب الإغراق
+            if (points.length % 10 === 0 || dist > 5) {
+                log(`📍 +${dist.toFixed(1)}م | سرعة ${currentSpeed.toFixed(1)} كم/س | المجموع ${totalDistance.toFixed(1)}م`);
+            }
+            
+            gpsStatusDiv.innerHTML = `✅ تتبع نشط | سرعة ${currentSpeed.toFixed(1)} كم/س | دقة ${accuracy.toFixed(0)}م`;
+        } else if (dist > 0) {
+            // حركة صغيرة جداً لكنها موجودة
+            totalDistance += dist;
+            distanceSpan.innerText = totalDistance.toFixed(2);
+            updateAverageSpeed();
+            updateCalories();
+        }
+        
+        // تحديث آخر موقع
+        lastLat = lat;
+        lastLon = lon;
+        lastTimestampMs = now;
+    }
+    
+    function onGpsError(error) {
+        log(`⚠️ خطأ GPS: ${error.message}`);
+        gpsStatusDiv.innerHTML = `⚠️ خطأ: ${error.message}. تأكد من تفعيل الموقع.`;
+    }
+    
+    // بدء التتبع بدقة عالية وسرعة فائقة
+    function startTracking() {
+        if (!navigator.geolocation) {
+            alert('المتصفح لا يدعم تحديد الموقع');
+            return;
+        }
+        
+        if (tracking) stopTracking();
+        
+        // إعادة تعيين المتغيرات
+        totalDistance = 0;
+        points = [];
+        lastLat = null;
+        lastLon = null;
+        lastTimestampMs = null;
+        currentSpeed = 0;
+        startTimestamp = Date.now();
+        totalMovingTimeMs = 0;
+        
+        distanceSpan.innerText = "0.00";
+        currentSpeedSpan.innerText = "0.00";
+        avgSpeedSpan.innerText = "0.00";
+        caloriesSpan.innerText = "0";
+        elapsedTimeSpan.innerText = "00:00:00";
+        
+        tracking = true;
+        
+        // إعدادات GPS عالية الدقة وسريعة التحديث
+        const options = {
+            enableHighAccuracy: true,    // أعلى دقة ممكنة
+            maximumAge: 0,               // لا تستخدم موقعاً مخبأً
+            timeout: 5000                // انتظر 5 ثواني كحد أقصى
+        };
+        
+        watchId = navigator.geolocation.watchPosition(onGpsUpdate, onGpsError, options);
+        
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        resetBtn.disabled = false;
+        
+        gpsStatusDiv.innerHTML = "🛰️ جلب إشارة GPS فائقة الدقة...";
+        log("🚀 بدء التتبع فائق الدقة والسرعة");
+        updateElapsedTime();
+        
+        // تهيئة الخريطة إن لم تكن موجودة
+        if (!map) {
+            map = L.map('map').setView([30.0444, 31.2357], 15);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
+            }).addTo(map);
+        } else {
+            // مسح الخريطة من العناصر القديمة
+            map.eachLayer(layer => {
+                if (layer instanceof L.Polyline || layer instanceof L.Marker || layer instanceof L.CircleMarker) {
+                    map.removeLayer(layer);
+                }
+            });
+        }
+    }
+    
+    function stopTracking() {
+        if (watchId) {
+            navigator.geolocation.clearWatch(watchId);
+            watchId = null;
+        }
+        tracking = false;
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        resetBtn.disabled = false;
+        gpsStatusDiv.innerHTML = "⏸️ تم إيقاف التتبع";
+        log(`⏹️ توقف التتبع. المسافة النهائية: ${totalDistance.toFixed(2)} متر`);
+    }
+    
+    function resetTracking() {
+        if (tracking) stopTracking();
+        totalDistance = 0;
+        points = [];
+        lastLat = lastLon = lastTimestampMs = null;
+        currentSpeed = 0;
+        startTimestamp = null;
+        distanceSpan.innerText = "0.00";
+        currentSpeedSpan.innerText = "0.00";
+        avgSpeedSpan.innerText = "0.00";
+        caloriesSpan.innerText = "0";
+        elapsedTimeSpan.innerText = "00:00:00";
+        if (map) {
+            map.eachLayer(layer => {
+                if (layer instanceof L.Polyline || layer instanceof L.Marker || layer instanceof L.CircleMarker) {
+                    map.removeLayer(layer);
+                }
+            });
+        }
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        resetBtn.disabled = true;
+        gpsStatusDiv.innerHTML = "🔄 تم إعادة الضبط";
+        log("🔄 إعادة ضبط جميع البيانات");
+    }
+    
+    // ربط الأزرار
+    startBtn.addEventListener('click', startTracking);
+    stopBtn.addEventListener('click', stopTracking);
+    resetBtn.addEventListener('click', resetTracking);
+</script>
+</body>
+</html>
