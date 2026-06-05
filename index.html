@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>🏃 متتبع السرعة والمسافة المتقدم | GPS Tracker</title>
+    <!-- Leaflet CSS & JS للخريطة -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', 'Cairo', Tahoma, sans-serif; }
+        body { background: linear-gradient(145deg, #1a2f3a, #0a1f2a); padding: 20px; color: white; min-height: 100vh; }
+        .container { max-width: 1000px; margin: auto; background: rgba(0,0,0,0.6); backdrop-filter: blur(12px); border-radius: 48px; padding: 20px; border: 1px solid #ffcc88; }
+        h1 { text-align: center; color: #ffdd99; margin-bottom: 10px; font-size: 1.5rem; }
+        .flex { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0; justify-content: center; }
+        button { padding: 8px 20px; border-radius: 40px; border: none; background: #e67e22; color: white; font-size: 0.9rem; cursor: pointer; transition: 0.1s; }
+        button:active { transform: scale(0.96); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .stats { background: #00000066; border-radius: 30px; padding: 15px; margin: 10px 0; text-align: center; }
+        .stat-value { font-size: 1.8rem; font-weight: bold; color: #88ffaa; }
+        .stat-label { font-size: 0.7rem; color: #ffdd99; }
+        .stat-row { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+        .stat-card { flex: 1; min-width: 100px; background: #00000044; border-radius: 20px; padding: 8px; }
+        #map { height: 300px; border-radius: 30px; margin: 10px 0; border: 2px solid #ffcc88; z-index: 1; }
+        .log { max-height: 150px; overflow-y: auto; font-size: 0.7rem; margin-top: 10px; border-top: 1px solid #ffaa5544; padding-top: 10px; }
+        .note { font-size: 0.65rem; color: #88aacc; text-align: center; margin-top: 10px; }
+        input, select { padding: 5px 10px; border-radius: 30px; border: none; background: #2c3e2f; color: white; margin: 0 5px; }
+        .session-buttons { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 10px 0; }
+        .settings { background: #1e2a32aa; border-radius: 30px; padding: 10px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🏃 متتبع السرعة والمسافة المتقدم (GPS)</h1>
+    
+    <div class="settings">
+        <div class="flex">
+            <label>⚖️ الوزن (كجم):</label>
+            <input type="number" id="weight" value="70" step="1" style="width:80px">
+            <label>📏 عتبة Auto-pause (ثانية):</label>
+            <input type="number" id="autoPauseSec" value="15" step="1" style="width:70px">
+        </div>
+    </div>
+
+    <div class="flex">
+        <button id="startBtn">▶️ بدء التتبع</button>
+        <button id="stopBtn" disabled>⏹️ إيقاف</button>
+        <button id="resetBtn" disabled>🔄 إعادة ضبط</button>
+        <button id="saveSessionBtn" disabled>💾 حفظ الجلسة</button>
+        <button id="exportCSVBtn">📎 تصدير CSV</button>
+        <button id="clearSessionsBtn">🗑️ مسح الجلسات</button>
+    </div>
+
+    <div id="map"></div>
+
+    <div class="stats">
+        <div class="stat-value"><span id="distance">0.00</span> متر</div>
+        <div class="stat-row">
+            <div class="stat-card"><div class="stat-label">⚡ السرعة الحالية</div><div class="stat-value" style="font-size:1rem;"><span id="currentSpeed">0.00</span> كم/س</div></div>
+            <div class="stat-card"><div class="stat-label">📊 متوسط السرعة</div><div class="stat-value" style="font-size:1rem;"><span id="avgSpeed">0.00</span> كم/س</div></div>
+            <div class="stat-card"><div class="stat-label">⏱️ الوقت</div><div class="stat-value" style="font-size:1rem;"><span id="elapsedTime">00:00:00</span></div></div>
+            <div class="stat-card"><div class="stat-label">🏃 النشاط</div><div class="stat-value" style="font-size:0.9rem;"><span id="activityStatus">—</span></div></div>
+            <div class="stat-card"><div class="stat-label">🔥 السعرات</div><div class="stat-value" style="font-size:1rem;"><span id="calories">0</span></div></div>
+            <div class="stat-card"><div class="stat-label">⛰️ الارتفاع</div><div class="stat-value" style="font-size:1rem;"><span id="altitude">0</span> م</div></div>
+        </div>
+        <div id="gpsStatus" class="note" style="background:#00000044; border-radius:20px; padding:5px;">⏳ انتظار البدء</div>
+    </div>
+
+    <div class="log" id="logArea"></div>
+    <div class="session-buttons" id="sessionsList"></div>
+    <div class="note">📌 يعمل عبر GPS. تحرك لعرض المسار والسرعة. يتغير لون المسار حسب السرعة (أخضر=بطيء، أحمر=سريع). يهتز ويصدر صوت كل 1 كم.</div>
+</div>
+
+<script>
+    // --------------------------------------------------------------
+    // 1. المتغيرات العامة
+    // --------------------------------------------------------------
+    let watchId = null;
+    let tracking = false;
+    let paused = false;          // auto-pause
+    let pauseStartTime = null;
+    let totalActiveTimeMs = 0;   // وقت الحركة الفعلي بالمللي ثانية
+    let lastMovementTimestamp = null;
+    
+    let startTimestamp = null;
+    let totalDistance = 0;
+    let points = [];             // {lat, lon, speed, alt, timestamp}
+    let totalElevationGain = 0;
+    let lastAlt = null;
+    
+    let lastLat = null, lastLon = null, lastTimestampMs = null;
+    let currentSpeedKph = 0;
+    let lastNotifiedKm = 0;
+    
+    let map = null;
+    let polyline = null;
+    let marker = null;
+    
+    // عناصر DOM
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const saveSessionBtn = document.getElementById('saveSessionBtn');
+    const exportCSVBtn = document.getElementById('exportCSVBtn');
+    const clearSessionsBtn = document.getElementById('clearSessionsBtn');
+    const weightInput = document.getElementById('weight');
+    const autoPauseSecInput = document.getElementById('autoPauseSec');
+    const distanceSpan = document.getElementById('distance');
+    const currentSpeedSpan = document.getElementById('currentSpeed');
+    const avgSpeedSpan = document.getElementById('avgSpeed');
+    const elapsedTimeSpan = document.getElementById('elapsedTime');
+    const activitySpan = document.getElementById('activityStatus');
+    const caloriesSpan = document.getElementById('calories');
+    const altitudeSpan = document.getElementById('altitude');
+    const gpsStatusDiv = document.getElementById('gpsStatus');
+    const logArea = document.getElementById('logArea');
+    const sessionsListDiv = document.getElementById('sessionsList');
+
+    // --------------------------------------------------------------
+    // 2. IndexedDB لحفظ الجلسات
+    // --------------------------------------------------------------
+    let db = null;
+    const DB_NAME = 'GPSTrackerDB';
+    const STORE_NAME = 'sessions';
+
+    function openDB() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(DB_NAME, 1);
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => { db = request.result; resolve(db); };
+            request.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains(STORE_NAME)) {
+                    db.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
+                }
+            };
+        });
+    }
+
+    async function saveSession(session) {
+        if (!db) await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+            const req = store.add(session);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    async function getAllSessions() {
+        if (!db) await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, 'readonly');
+            const store = tx.objectStore(STORE_NAME);
+            const req = store.getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    async function deleteSession(id) {
+        if (!db) await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+            const req = store.delete(id);
+            req.onsuccess = () => resolve();
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    async function clearAllSessions() {
+        if (!db) await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+            const req = store.clear();
+            req.onsuccess = () => resolve();
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    // --------------------------------------------------------------
+    // 3. دوال مساعدة
+    // --------------------------------------------------------------
+    function log(msg) {
+        const div = document.createElement('div');
+        div.innerText = new Date().toLocaleTimeString() + ' - ' + msg;
+        logArea.appendChild(div);
+        logArea.scrollTop = logArea.scrollHeight;
+        if (logArea.children.length > 50) logArea.removeChild(logArea.children[0]);
+    }
+
+    function distanceMeters(lat1, lon1, lat2, lon2) {
+        const R = 6371000;
+        const dLat = (lat2-lat1)*Math.PI/180;
+        const dLon = (lon2-lon1)*Math.PI/180;
+        const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    function speedKmph(distMeters, timeMs) {
+        if (timeMs <= 0) return 0;
+        return (distMeters / 1000) / (timeMs / 3600000);
+    }
+
+    function getActivityFromSpeed(speed) {
+        if (speed < 0.5) return '🚶 واقف';
+        if (speed < 7) return '🚶 ماشي';
+        if (speed < 12) return '🏃 هرولة';
+        return '💨 جري سريع';
+    }
+
+    function calculateCalories(distanceKm, avgSpeedKph, weightKg) {
+        // معادلة تقريبية: 0.7 للمشي، 1.0 للجري
+        let factor = avgSpeedKph < 7 ? 0.7 : 1.0;
+        return Math.round(distanceKm * weightKg * factor);
+    }
+
+    function updateUI() {
+        distanceSpan.innerText = totalDistance.toFixed(2);
+        currentSpeedSpan.innerText = currentSpeedKph.toFixed(2);
+        let avg = 0;
+        if (totalActiveTimeMs > 0 && totalDistance > 0) {
+            avg = (totalDistance / 1000) / (totalActiveTimeMs / 3600000);
+        }
+        avgSpeedSpan.innerText = avg.toFixed(2);
+        activitySpan.innerText = getActivityFromSpeed(currentSpeedKph);
+        let weight = parseFloat(weightInput.value) || 70;
+        let calories = calculateCalories(totalDistance/1000, avg, weight);
+        caloriesSpan.innerText = calories;
+    }
+
+    function updateElapsedTime() {
+        if (!tracking || paused || !startTimestamp) return;
+        const now = Date.now();
+        const elapsed = (now - startTimestamp) - (pauseStartTime ? (now - pauseStartTime) : 0);
+        const totalSec = Math.floor(elapsed / 1000);
+        const hours = Math.floor(totalSec / 3600);
+        const minutes = Math.floor((totalSec % 3600) / 60);
+        const seconds = totalSec % 60;
+        elapsedTimeSpan.innerText = `${hours.toString().padStart(2,'0')}:${minutes.toString().padStart(2,'0')}:${seconds.toString().padStart(2,'0')}`;
+        requestAnimationFrame(updateElapsedTime);
+    }
+
+    function notifyAndVibrate() {
+        let km = Math.floor(totalDistance / 1000);
+        if (km > lastNotifiedKm) {
+            lastNotifiedKm = km;
+            log(`🎉 أهنئك! قطعـت ${km} كم`);
+            if (navigator.vibrate) navigator.vibrate(500);
+            // صوت قصير
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.frequency.value = 880;
+            gain.gain.value = 0.2;
+            osc.start();
+            gain.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + 0.5);
+            ctx.resume();
+            setTimeout(() => ctx.close(), 600);
+        }
+    }
+
+    // تحديث الخريطة والمسار
+    function updateMapAndPolyline() {
+        if (!map) return;
+        if (points.length === 0) return;
+        const latlngs = points.map(p => [p.lat, p.lon]);
+        if (polyline) map.removeLayer(polyline);
+        // تلوين حسب السرعة
+        polyline = L.polyline(latlngs, { color: 'blue', weight: 4 }).addTo(map);
+        // إضافة نقاط ملونة حسب السرعة (ماركرات صغيرة)
+        points.forEach((p, idx) => {
+            let color = p.speed < 5 ? 'green' : (p.speed < 10 ? 'orange' : 'red');
+            L.circleMarker([p.lat, p.lon], { radius: 3, color: color, fillColor: color, fillOpacity: 0.7 }).addTo(map);
+        });
+        if (marker) map.removeLayer(marker);
+        marker = L.marker([points[points.length-1].lat, points[points.length-1].lon]).addTo(map);
+        map.fitBounds(latlngs);
+    }
+
+    // --------------------------------------------------------------
+    // 4. معالجة تحديث GPS
+    // --------------------------------------------------------------
+    function onPositionUpdate(pos) {
+        if (!tracking) return;
+        const now = Date.now();
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        const alt = pos.coords.altitude || 0;
+        altitudeSpan.innerText = alt.toFixed(0);
+
+        // Auto-pause: إذا كانت السرعة أقل من 0.5 كم/س لأكثر من X ثانية
+        let tempSpeed = 0;
+        if (lastLat !== null && lastLon !== null && lastTimestampMs !== null) {
+            const dist = distanceMeters(lastLat, lastLon, lat, lon);
+            const dt = now - lastTimestampMs;
+            if (dt > 100) tempSpeed = speedKmph(dist, dt);
+            if (tempSpeed < 0.5) {
+                if (!paused && lastMovementTimestamp && (now - lastMovementTimestamp) > autoPauseSecInput.value * 1000) {
+                    paused = true;
+                    pauseStartTime = now;
+                    gpsStatusDiv.innerHTML = '⏸️ توقف مؤقت (Auto-pause)';
+                    log('⏸️ Auto-pause: لا حركة لأكثر من ' + autoPauseSecInput.value + ' ثانية');
+                }
+            } else {
+                if (paused) {
+                    paused = false;
+                    // إضافة الوقت المتوقف إلى الـ startTimestamp
+                    let pauseDuration = now - pauseStartTime;
+                    startTimestamp += pauseDuration;
+                    pauseStartTime = null;
+                    gpsStatusDiv.innerHTML = '▶️ استئناف التتبع';
+                    log('▶️ استئناف التتبع بعد توقف');
+                }
+                lastMovementTimestamp = now;
+            }
+        }
+
+        if (!paused && lastLat !== null && lastLon !== null && lastTimestampMs !== null) {
+            const dist = distanceMeters(lastLat, lastLon, lat, lon);
+            const dt = now - lastTimestampMs;
+            if (dist > 0.5 && dt > 200) {
+                totalDistance += dist;
+                currentSpeedKph = tempSpeed;
+                totalActiveTimeMs += dt;
+                // إضافة نقطة
+                points.push({ lat, lon, speed: currentSpeedKph, alt, timestamp: now });
+                updateUI();
+                updateMapAndPolyline();
+                notifyAndVibrate();
+                log(`📍 +${dist.toFixed(1)}م | سرعة ${currentSpeedKph.toFixed(2)} كم/س | المجموع ${totalDistance.toFixed(1)}م`);
+                gpsStatusDiv.innerHTML = `✅ تتبع نشط | سرعة ${currentSpeedKph.toFixed(2)} كم/س`;
+                
+                // حساب ارتفاع المنحدر
+                if (lastAlt !== null && alt > lastAlt + 2) {
+                    totalElevationGain += (alt - lastAlt);
+                }
+                lastAlt = alt;
+            }
+        }
+        lastLat = lat;
+        lastLon = lon;
+        lastTimestampMs = now;
+    }
+
+    function onGpsError(err) {
+        log(`⚠️ خطأ GPS: ${err.message}`);
+        gpsStatusDiv.innerHTML = `⚠️ خطأ: ${err.message}`;
+    }
+
+    // --------------------------------------------------------------
+    // 5. التحكم بالتتبع
+    // --------------------------------------------------------------
+    function startTracking() {
+        if (!navigator.geolocation) { alert('GPS غير مدعوم'); return; }
+        if (tracking) stopTracking();
+        resetTracking(false);
+        tracking = true;
+        paused = false;
+        pauseStartTime = null;
+        startTimestamp = Date.now();
+        lastMovementTimestamp = startTimestamp;
+        totalActiveTimeMs = 0;
+        points = [];
+        totalElevationGain = 0;
+        lastNotifiedKm = 0;
+        
+        // تهيئة الخريطة
+        if (!map) {
+            map = L.map('map').setView([30.0444, 31.2357], 13);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>' }).addTo(map);
+        } else {
+            map.eachLayer(layer => { if (layer instanceof L.Polyline || layer instanceof L.Marker || layer instanceof L.CircleMarker) map.removeLayer(layer); });
+        }
+        
+        watchId = navigator.geolocation.watchPosition(onPositionUpdate, onGpsError, { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 });
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        resetBtn.disabled = false;
+        saveSessionBtn.disabled = false;
+        gpsStatusDiv.innerHTML = "📍 تتبع GPS نشط... ابدأ بالتحرك";
+        log("🚀 بدء تتبع GPS المتقدم");
+        updateElapsedTime();
+    }
+
+    function stopTracking() {
+        if (watchId) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+        tracking = false;
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        resetBtn.disabled = false;
+        saveSessionBtn.disabled = false;
+        gpsStatusDiv.innerHTML = "⏸️ تم إيقاف التتبع";
+        log("⏹️ توقف التتبع. المسافة النهائية: " + totalDistance.toFixed(2) + " متر");
+        if (points.length && map) map.fitBounds(points.map(p=>[p.lat,p.lon]));
+    }
+
+    function resetTracking(keepMap = true) {
+        if (tracking) stopTracking();
+        totalDistance = 0;
+        currentSpeedKph = 0;
+        points = [];
+        lastLat = lastLon = lastTimestampMs = null;
+        lastAlt = null;
+        totalElevationGain = 0;
+        startTimestamp = null;
+        paused = false;
+        totalActiveTimeMs = 0;
+        updateUI();
+        elapsedTimeSpan.innerText = "00:00:00";
+        if (!keepMap && map) {
+            map.eachLayer(layer => { if (layer instanceof L.Polyline || layer instanceof L.Marker || layer instanceof L.CircleMarker) map.removeLayer(layer); });
+        }
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        resetBtn.disabled = true;
+        saveSessionBtn.disabled = true;
+        gpsStatusDiv.innerHTML = "🔄 تم إعادة الضبط";
+        log("🔄 إعادة ضبط جميع البيانات");
+    }
+
+    // حفظ الجلسة الحالية
+    async function saveCurrentSession() {
+        if (points.length === 0) { alert("لا توجد بيانات لحفظها"); return; }
+        const session = {
+            date: new Date().toISOString(),
+            totalDistance: totalDistance,
+            avgSpeed: parseFloat(avgSpeedSpan.innerText),
+            maxSpeed: Math.max(...points.map(p=>p.speed),0),
+            totalElevation: totalElevationGain,
+            calories: parseInt(caloriesSpan.innerText),
+            points: points,
+            durationMs: totalActiveTimeMs
+        };
+        await saveSession(session);
+        log("💾 تم حفظ الجلسة");
+        loadSessionsList();
+    }
+
+    async function loadSessionsList() {
+        const sessions = await getAllSessions();
+        sessionsListDiv.innerHTML = '';
+        for (let s of sessions) {
+            const btn = document.createElement('button');
+            btn.innerText = `📅 ${new Date(s.date).toLocaleString()} | ${(s.totalDistance/1000).toFixed(2)} كم`;
+            btn.onclick = () => loadSession(s);
+            sessionsListDiv.appendChild(btn);
+        }
+    }
+
+    function loadSession(session) {
+        if (tracking) stopTracking();
+        resetTracking();
+        totalDistance = session.totalDistance;
+        points = session.points;
+        totalActiveTimeMs = session.durationMs;
+        totalElevationGain = session.totalElevation || 0;
+        updateUI();
+        updateMapAndPolyline();
+        log(`📂 تم تحميل جلسة من ${new Date(session.date).toLocaleString()}`);
+    }
+
+    function exportToCSV() {
+        if (points.length === 0) { alert("لا توجد نقاط لتصديرها"); return; }
+        let csv = "latitude,longitude,speed_kmh,altitude_m,timestamp\n";
+        points.forEach(p => {
+            csv += `${p.lat},${p.lon},${p.speed},${p.alt},${new Date(p.timestamp).toISOString()}\n`;
+        });
+        const blob = new Blob([csv], {type: "text/csv"});
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `gps_track_${new Date().toISOString()}.csv`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        log("📎 تم تصدير المسار كـ CSV");
+    }
+
+    async function clearAllSessionsHandler() {
+        if (confirm("مسح جميع الجلسات نهائياً؟")) {
+            await clearAllSessions();
+            loadSessionsList();
+            log("🗑️ تم مسح جميع الجلسات");
+        }
+    }
+
+    // أحداث الأزرار
+    startBtn.addEventListener('click', startTracking);
+    stopBtn.addEventListener('click', stopTracking);
+    resetBtn.addEventListener('click', () => resetTracking(true));
+    saveSessionBtn.addEventListener('click', saveCurrentSession);
+    exportCSVBtn.addEventListener('click', exportToCSV);
+    clearSessionsBtn.addEventListener('click', clearAllSessionsHandler);
+
+    openDB().then(() => loadSessionsList()).catch(console.error);
+</script>
+</body>
+</html>
